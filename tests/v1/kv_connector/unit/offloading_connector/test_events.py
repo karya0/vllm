@@ -506,6 +506,44 @@ def test_event_metadata_skips_non_full_attention_group(
     assert events[0].block_size == 0
 
 
+@pytest.mark.parametrize("remove_secondary_in_same_batch", [False, True])
+def test_primary_removal_preserves_metadata_for_same_batch_kvcr_store(
+    remove_secondary_in_same_batch,
+):
+    tracker = _tracker()
+    group_config = _group_config(block_size=64, blocks_per_chunk=2)
+    req = _request(block_hashes=[_hash(i) for i in range(4)], token_count=256)
+    key = _record_chunks(tracker, req, group_config, num_chunks=2)[1]
+
+    batch = [
+        _removed_event([key]),
+        _stored_event([key], ownership="kvcr", removal_expected=True),
+    ]
+    if remove_secondary_in_same_batch:
+        batch.append(_removed_event([key], ownership="kvcr"))
+    removed, stored, *secondary_removals = tracker.take_events(batch)
+
+    assert isinstance(removed, BlockRemoved)
+    assert isinstance(stored, BlockStored)
+    assert stored.block_size == 64
+    assert stored.token_ids == list(range(129, 257))
+    assert stored.parent_block_hash == _wire_hash(_hash(1))
+    assert stored.block_hashes == removed.block_hashes == [
+        _wire_hash(_hash(2)),
+        _wire_hash(_hash(3)),
+    ]
+    assert stored.ownership == "kvcr"
+
+    if not remove_secondary_in_same_batch:
+        secondary_removals = list(
+            tracker.take_events([_removed_event([key], ownership="kvcr")])
+        )
+    [final_removal] = secondary_removals
+    assert final_removal.block_hashes == stored.block_hashes
+    [after_eviction] = tracker.take_events([_stored_event([key], ownership="kvcr")])
+    assert after_eviction.block_size == 0
+
+
 def test_pending_cpu_removal_consumes_hit_backfill_until_next_hit():
     tracker = _tracker()
     block_hashes = [_hash(0), _hash(1)]
