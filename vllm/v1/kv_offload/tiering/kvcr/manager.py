@@ -463,6 +463,11 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         return LookupResult.MISS
 
     @override
+    def touch(self, keys: Collection[OffloadKey], req_context: ReqContext) -> None:
+        """Forward framework access notifications to KVCR eviction policy."""
+        self._kvcr.touch(tuple(self._key_adapter.encode(key) for key in keys))
+
+    @override
     def submit_load(self, job_metadata: TransferJob) -> None:
         blocks = {
             self._key_adapter.encode(key): [self._make_descriptor(int(chunk_id))]
