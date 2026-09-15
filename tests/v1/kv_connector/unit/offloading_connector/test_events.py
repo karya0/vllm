@@ -720,3 +720,41 @@ def test_tiering_accepts_self_describing_kv_events():
     assert spec.kv_events_config.enable_kv_cache_events
     assert spec.kv_events_config.self_describing_kv_events
     assert tracker.self_describing_enabled
+
+
+def test_primary_removal_preserves_metadata_for_later_batch_kvcr_store():
+    tracker = _tracker()
+    group_config = _group_config(block_size=64, blocks_per_chunk=2)
+    req = _request(block_hashes=[_hash(i) for i in range(4)], token_count=256)
+    key = _record_chunks(tracker, req, group_config, num_chunks=2)[1]
+
+    [removed] = tracker.take_events(
+        [_removed_event([key])], pending_store_keys={key}
+    )
+    assert list(tracker.take_events([], pending_store_keys={key})) == []
+    [stored] = tracker.take_events(
+        [_stored_event([key], ownership="kvcr", removal_expected=True)]
+    )
+    assert stored.block_size == 64
+    assert stored.token_ids == list(range(129, 257))
+    assert stored.parent_block_hash == _wire_hash(_hash(1))
+    assert stored.block_hashes == removed.block_hashes
+
+    [final_removal] = tracker.take_events(
+        [_removed_event([key], ownership="kvcr")]
+    )
+    assert final_removal.block_hashes == stored.block_hashes
+    [after_eviction] = tracker.take_events([_stored_event([key], ownership="kvcr")])
+    assert after_eviction.block_size == 0
+
+
+def test_cancelled_pending_store_releases_metadata_on_empty_batch():
+    tracker = _tracker()
+    group_config = _group_config(block_size=64)
+    req = _request(block_hashes=[_hash(0)], token_count=64)
+    [key] = _record_chunks(tracker, req, group_config, num_chunks=1)
+
+    list(tracker.take_events([_removed_event([key])], pending_store_keys={key}))
+    assert list(tracker.take_events([], pending_store_keys=())) == []
+    [stored] = tracker.take_events([_stored_event([key], ownership="kvcr")])
+    assert stored.block_size == 0

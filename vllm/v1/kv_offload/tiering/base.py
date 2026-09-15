@@ -243,6 +243,13 @@ class SecondaryTierManager(ABC):
         """
         return False
 
+    def get_pending_store_event_keys(self) -> Iterable[OffloadKey]:
+        """Keys with buffered store announcements; do not consume them.
+
+        The composing manager additionally protects its in-flight transfers.
+        """
+        return ()
+
     def take_events(self) -> Iterable[OffloadingEvent]:
         """Take KV events for storage state owned by this tier."""
         return ()

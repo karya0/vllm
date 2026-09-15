@@ -355,6 +355,14 @@ class OffloadingManager(ABC):
         """
         return
 
+    def get_pending_store_event_keys(self) -> Iterable[OffloadKey]:
+        """Keys whose store announcements are not yet consumed.
+
+        Include in-flight stores and completed stores with buffered inventory.
+        Called before take_events() on the scheduler thread; never drains work.
+        """
+        return ()
+
     def take_events(self) -> Iterable[OffloadingEvent]:
         """
         Take the offloading events from the manager.

@@ -15,7 +15,7 @@ of the same hash. Opt-in via
 KV cache events are enabled. See the PR description for the full design.
 """
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -113,6 +113,7 @@ class OffloadingEventsTracker:
 
         # OffloadKey -> payload snapshot, kept until final removal or reset.
         self._pending_event_metadata: dict[OffloadKey, _OffloadEventMetadata] = {}
+        self._metadata_cleanup_candidates: set[OffloadKey] = set()
 
     def record_store(
         self,
@@ -235,7 +236,12 @@ class OffloadingEventsTracker:
             meta.active_residencies.update(existing.active_residencies)
         self._pending_event_metadata[offload_key] = meta
 
-    def take_events(self, events: Iterable[OffloadingEvent]) -> Iterable[KVCacheEvent]:
+    def take_events(
+        self,
+        events: Iterable[OffloadingEvent],
+        *,
+        pending_store_keys: Collection[OffloadKey] = (),
+    ) -> Iterable[KVCacheEvent]:
         """Translate raw OffloadingEvents into self-describing KV events.
 
         Complete metadata is available only for full-attention groups when
@@ -246,25 +252,29 @@ class OffloadingEventsTracker:
             ``BlockStored`` or ``BlockRemoved`` events corresponding to
             the underlying :class:`OffloadingEvent` stream.
         """
-        removed_keys: set[OffloadKey] = set()
         for event in events:
             if event.removed:
-                removed_keys.update(event.keys)
+                self._metadata_cleanup_candidates.update(event.keys)
                 yield from self._take_removed_event(event)
             else:
                 yield from self._take_stored_event(event)
 
-        # A primary removal can precede a queued secondary store in this batch.
-        # Keep its payload until all stores have registered their residencies.
-        for key in removed_keys:
+        # Transfer completion can precede inventory publication across batches.
+        # Revisit deferred cleanup even when this batch contains no events.
+        pending = set(pending_store_keys)
+        for key in tuple(self._metadata_cleanup_candidates):
             meta = self._pending_event_metadata.get(key)
             if meta is not None and not meta.active_residencies:
+                if key in pending:
+                    continue
                 self._pending_event_metadata.pop(key)
+            self._metadata_cleanup_candidates.discard(key)
 
     def reset(self) -> None:
         """Drop all tracked state; pending payloads are stale after a
         manager cache reset."""
         self._pending_event_metadata.clear()
+        self._metadata_cleanup_candidates.clear()
 
     def _build_event_metadata(
         self,

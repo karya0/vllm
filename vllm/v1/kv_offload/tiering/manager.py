@@ -845,6 +845,15 @@ class TieringOffloadingManager(OffloadingManager):
         )
 
     @override
+    def get_pending_store_event_keys(self) -> Iterable[OffloadKey]:
+        yield from self.primary_tier.get_pending_store_event_keys()
+        for job in self._jobs.values():
+            if not job.transfer_job.is_promotion:
+                yield from job.transfer_job.keys
+        for tier in self.secondary_tiers:
+            yield from tier.get_pending_store_event_keys()
+
+    @override
     def take_events(self) -> Iterable[OffloadingEvent]:
         """Yield events owned by the primary and secondary tiers.
 

@@ -1950,7 +1950,10 @@ class OffloadingConnectorScheduler:
             ``BlockStored`` or ``BlockRemoved`` events corresponding to
             the underlying :class:`OffloadingEvent` stream.
         """
-        yield from self._events_tracker.take_events(self.manager.take_events())
+        pending_store_keys = set(self.manager.get_pending_store_event_keys())
+        yield from self._events_tracker.take_events(
+            self.manager.take_events(), pending_store_keys=pending_store_keys
+        )
 
     def reset_cache(self) -> None:
         """Reset the offloading manager cache, evicting all stored chunks."""

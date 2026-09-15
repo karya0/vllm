@@ -568,6 +568,14 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         return True
 
     @override
+    def get_pending_store_event_keys(self) -> Iterable[OffloadKey]:
+        for key in self._kvcr.pending_inventory_store_keys():
+            yield OffloadKey(bytes(key))
+        for event in self._inventory_events:
+            if not event.removed:
+                yield from event.keys
+
+    @override
     def take_events(self) -> Iterable[OffloadingEvent]:
         events = self._inventory_events
         self._inventory_events = []
