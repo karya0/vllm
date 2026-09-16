@@ -120,6 +120,7 @@ class OffloadingEventsTracker:
 
         # OffloadKey -> payload snapshot, kept until final removal or reset.
         self._pending_event_metadata: dict[OffloadKey, _OffloadEventMetadata] = {}
+        self._deferred_removals: set[OffloadKey] = set()
 
     def record_store(
         self,
@@ -242,7 +243,11 @@ class OffloadingEventsTracker:
             meta.active_residencies.update(existing.active_residencies)
         self._pending_event_metadata[offload_key] = meta
 
-    def take_events(self, events: Iterable[OffloadingEvent]) -> Iterable[KVCacheEvent]:
+    def take_events(
+        self,
+        events: Iterable[OffloadingEvent],
+        pending_store_keys: set[OffloadKey] | frozenset[OffloadKey] = frozenset(),
+    ) -> Iterable[KVCacheEvent]:
         """Translate raw OffloadingEvents into self-describing KV events.
 
         Complete metadata is available only for full-attention groups when
@@ -254,26 +259,29 @@ class OffloadingEventsTracker:
             the underlying :class:`OffloadingEvent` stream.
 
         """
-        removed_keys: set[OffloadKey] = set()
         for event in events:
             if event.removed:
                 if self.self_describing_enabled:
-                    removed_keys.update(event.keys)
+                    self._deferred_removals.update(event.keys)
                 yield from self._take_removed_event(event)
             else:
                 yield from self._take_stored_event(event)
 
         # A primary removal can precede a queued secondary store in this batch.
         # Keep its payload until all stores have registered their residencies.
-        for key in removed_keys:
+        for key in tuple(self._deferred_removals):
             meta = self._pending_event_metadata.get(key)
-            if meta is not None and not meta.active_residencies:
+            if meta is None or meta.active_residencies:
+                self._deferred_removals.discard(key)
+            elif key not in pending_store_keys:
                 self._pending_event_metadata.pop(key)
+                self._deferred_removals.discard(key)
 
     def reset(self) -> None:
         """Drop all tracked state; pending payloads are stale after a
         manager cache reset."""
         self._pending_event_metadata.clear()
+        self._deferred_removals.clear()
 
     def _build_event_metadata(
         self,
