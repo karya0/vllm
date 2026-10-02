@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import dataclasses
+import logging
 from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -2910,11 +2911,13 @@ def test_kv_connector_basic(is_async: bool):
 
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize("local_cache_hits", [False, True])
-def test_external_prefix_cache_metrics(is_async: bool, local_cache_hits: bool):
+@pytest.mark.parametrize("log_level", [logging.INFO, logging.DEBUG])
+def test_external_prefix_cache_metrics(is_async, local_cache_hits, caplog, log_level):
     """Verify connector prefix cache metrics are updated
     correctly when the scheduler processes requests with KV connector hits.
     """
     BLOCK_SIZE = 16
+    caplog.set_level(log_level, logger="vllm.v1.core.sched.scheduler")
     if local_cache_hits:
         NUM_MATCHED_NEW_TOKENS = BLOCK_SIZE * 2  # 32 tokens
         NUM_LOCAL_HITS = NUM_MATCHED_NEW_TOKENS * 2  # 64 tokens
@@ -3023,6 +3026,16 @@ def test_external_prefix_cache_metrics(is_async: bool, local_cache_hits: bool):
     assert external_stats.hits == NUM_MATCHED_NEW_TOKENS * NUM_REQUESTS
     assert external_stats.requests == NUM_REQUESTS
     assert external_stats.preempted_requests == 0
+    credits = [
+        r
+        for r in caplog.records
+        if r.message.startswith("KV_REQUEST_PREFILL_STATS ") and r.args[1] == NUM_TOKENS
+    ]
+    assert len(credits) == (NUM_REQUESTS if log_level == logging.DEBUG else 0)
+    for record in credits:
+        _, prompt, local, external, computed = record.args
+        assert local == NUM_LOCAL_HITS and external == NUM_MATCHED_NEW_TOKENS
+        assert prompt == local + external + computed
 
 
 @pytest.mark.parametrize(

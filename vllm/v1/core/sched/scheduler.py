@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import itertools
+import logging
 import time
 from collections import defaultdict, deque
 from collections.abc import Iterable
@@ -2209,6 +2210,17 @@ class Scheduler(SchedulerInterface):
                     prefill_stats.finalize(
                         self.kv_cache_manager.estimate_cached_tokens(request)
                     )
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "KV_REQUEST_PREFILL_STATS request_id=%s prompt_tokens=%d "
+                            "local_cached_tokens=%d external_cached_tokens=%d "
+                            "computed_tokens=%d accounting=admission",
+                            req_id,
+                            prefill_stats.num_prompt_tokens,
+                            prefill_stats.num_local_cached_tokens,
+                            prefill_stats.num_external_cached_tokens,
+                            prefill_stats.num_computed_tokens,
+                        )
 
             # Extract sample logprobs before stop handling can replace the
             # sampling parameters for a streaming continuation.
