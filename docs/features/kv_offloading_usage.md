@@ -22,6 +22,17 @@ flowchart LR
     CPU <--> SN["..."]
 ```
 
+## Diagnostics
+
+Set `VLLM_LOGGING_LEVEL=DEBUG` before startup, or enable DEBUG for the scheduler
+and KVCR adapter loggers. `KV_REQUEST_PREFILL_STATS` reports admission token
+accounting, which can become stale after load failures; it does not prove cache
+consumption or identify a Guard source. `KVCR_ADAPTER_SUBMIT` and
+`KVCR_ADAPTER_COMPLETED` join request/job/operation IDs, submission time, block
+outcomes, and elapsed time through final completion polling (not RDMA latency).
+Adapter tracing is selected at construction. Logs exclude keys and request
+contents. Keep DEBUG disabled for headline performance comparisons.
+
 ## Per-request load control
 
 Individual requests can cap how many tokens are loaded from offloaded storage

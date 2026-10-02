@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import logging
 import mmap
 from collections.abc import Collection, Iterable, Mapping
 from types import SimpleNamespace
@@ -572,9 +573,11 @@ def test_kvcr_tier_requires_self_describing_inventory_events(monkeypatch):
         )
 
 
-def test_kvcr_tier_accumulates_block_results(monkeypatch):
+@pytest.mark.parametrize("log_level", [logging.INFO, logging.DEBUG])
+def test_kvcr_tier_accumulates_block_results(monkeypatch, caplog, log_level):
     """Wait for every block result and preserve partial success while draining."""
     kvcr = RecordingKVCR()
+    caplog.set_level(log_level, logger=kvcr_manager.logger.name)
     tier = _make_tier(monkeypatch, kvcr)
     keys = [OffloadKey(b"k0"), OffloadKey(b"k1")]
     tier.submit_load(
@@ -599,3 +602,27 @@ def test_kvcr_tier_accumulates_block_results(monkeypatch):
     assert result.job_id == 13
     assert not result.success
     assert result.successful_keys == {keys[0]}
+    completed = [m for m in caplog.messages if m.startswith("KVCR_ADAPTER_COMPLETED ")]
+    assert bool(completed) is (log_level == logging.DEBUG)
+    if completed:
+        assert "request_id=req job_id=13" in completed[0]
+        assert "successful_blocks=1 failed_blocks=1" in completed[0]
+        assert tier._trace_jobs == {}
+
+
+def test_kvcr_trace_disabled_does_not_time_or_retain_jobs(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=kvcr_manager.logger.name)
+    kvcr = RecordingKVCR()
+    tier = _make_tier(monkeypatch, kvcr)
+
+    def forbidden_clock():
+        pytest.fail("disabled diagnostic must not read the clock")
+
+    monkeypatch.setattr(
+        kvcr_manager, "time", SimpleNamespace(monotonic=forbidden_clock)
+    )
+    tier.submit_load(
+        _job(7, ReqContext(req_id="req"), key=OffloadKey(b"k0"), chunk_id=0)
+    )
+    assert list(tier.get_finished_jobs())
+    assert tier._trace_jobs is None
