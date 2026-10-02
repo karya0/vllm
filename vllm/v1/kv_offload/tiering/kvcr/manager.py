@@ -3,6 +3,7 @@
 """vLLM secondary-tier adapter for KVCR."""
 
 import ctypes
+import logging
 import mmap
 import socket
 import time
@@ -451,6 +452,9 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         self._local_dram_mmap = local_mapping
         self._finished_jobs: list[JobResult] = []
         self._jobs_by_op: dict[OpHandle, _JobState] = {}
+        self._trace_jobs: dict[OpHandle, tuple[float, str, str, int, int]] | None = (
+            {} if logger.isEnabledFor(logging.DEBUG) else None
+        )
 
     @override
     def lookup(self, key: OffloadKey, req_context: ReqContext) -> LookupResult:
@@ -476,6 +480,7 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
             )
             return
 
+        started_at = time.monotonic() if self._trace_jobs is not None else None
         op_handle = self._kvcr.deliver(
             blocks, request_id=job_metadata.req_context.req_id
         )
@@ -485,6 +490,8 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
             True,
             set(),
         )
+        if started_at is not None:
+            self._trace_submit("load", op_handle, job_metadata, len(blocks), started_at)
 
     @override
     def submit_store(self, job_metadata: TransferJob) -> None:
@@ -499,12 +506,38 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
                 JobResult(job_id=job_metadata.job_id, success=True)
             )
             return
+        started_at = time.monotonic() if self._trace_jobs is not None else None
         op_handle = self._kvcr.deposit(blocks)
         self._jobs_by_op[op_handle] = (
             job_metadata.job_id,
             len(blocks),
             True,
             None,
+        )
+        if started_at is not None:
+            self._trace_submit(
+                "store", op_handle, job_metadata, len(blocks), started_at
+            )
+
+    def _trace_submit(
+        self,
+        operation: str,
+        op: OpHandle,
+        job: TransferJob,
+        blocks: int,
+        started: float,
+    ) -> None:
+        assert self._trace_jobs is not None
+        self._trace_jobs[op] = (started, job.req_context.req_id, operation, blocks, 0)
+        logger.debug(
+            "KVCR_ADAPTER_SUBMIT request_id=%s job_id=%d op=%d operation=%s "
+            "blocks=%d submit_ms=%.3f",
+            job.req_context.req_id,
+            job.job_id,
+            op,
+            operation,
+            blocks,
+            (time.monotonic() - started) * 1000,
         )
 
     @override
@@ -537,6 +570,34 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
             job_id, remaining, success, successful_keys = job_state
             remaining -= len(entries)
             success = success and all(entry.success for entry in entries.values())
+            if self._trace_jobs is not None:
+                started, request_id, operation, requested, completed = self._trace_jobs[
+                    op_handle
+                ]
+                completed += sum(entry.success for entry in entries.values())
+                if remaining > 0:
+                    self._trace_jobs[op_handle] = (
+                        started,
+                        request_id,
+                        operation,
+                        requested,
+                        completed,
+                    )
+                else:
+                    self._trace_jobs.pop(op_handle)
+                    logger.debug(
+                        "KVCR_ADAPTER_COMPLETED request_id=%s job_id=%d op=%d "
+                        "operation=%s requested_blocks=%d successful_blocks=%d "
+                        "failed_blocks=%d elapsed_ms=%.3f",
+                        request_id,
+                        job_id,
+                        op_handle,
+                        operation,
+                        requested,
+                        completed,
+                        requested - completed,
+                        (time.monotonic() - started) * 1000,
+                    )
             if successful_keys is not None:
                 successful_keys.update(
                     OffloadKey(bytes(key))
