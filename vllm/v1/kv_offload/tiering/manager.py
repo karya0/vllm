@@ -566,6 +566,10 @@ class TieringOffloadingManager(OffloadingManager):
         self._pending_load_submissions.clear()
 
     @override
+    def is_write_pending(self, key: OffloadKey) -> bool:
+        return self.primary_tier.is_write_pending(key)
+
+    @override
     def prepare_load(
         self, keys: Collection[OffloadKey], req_context: ReqContext
     ) -> LoadStoreSpec:

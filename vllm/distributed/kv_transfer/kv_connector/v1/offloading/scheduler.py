@@ -2064,7 +2064,9 @@ class OffloadingConnectorScheduler:
             key for job in self._jobs.values() if job.is_store for key in job.keys
         }
         yield from self._events_tracker.take_events(
-            self.manager.take_events(), pending_store_keys=pending_store_keys
+            self.manager.take_events(),
+            pending_store_keys=pending_store_keys,
+            is_write_pending=self.manager.is_write_pending,
         )
 
     def reset_cache(self) -> None:

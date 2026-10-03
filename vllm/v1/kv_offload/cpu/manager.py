@@ -201,6 +201,11 @@ class CPUOffloadingManager(OffloadingManager):
         return CacheHitSource.HOST
 
     @override
+    def is_write_pending(self, key: OffloadKey) -> bool:
+        chunk = self._policy.get(key)
+        return chunk is not None and not chunk.is_ready
+
+    @override
     def prepare_load(
         self,
         keys: Collection[OffloadKey],

@@ -436,6 +436,10 @@ class OffloadingManager(ABC):
         """Evict all tracked blocks and reset internal state."""
         return
 
+    def is_write_pending(self, key: OffloadKey) -> bool:
+        """Whether an allocated chunk still awaits its store completion."""
+        return False
+
     def get_stats(self) -> "OffloadingConnectorStats | None":
         """Return collected metrics since last call, or None if disabled."""
         return None

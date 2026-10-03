@@ -15,7 +15,7 @@ of the same hash. Opt-in via
 KV cache events are enabled. See the PR description for the full design.
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -249,6 +249,7 @@ class OffloadingEventsTracker:
         self,
         events: Iterable[OffloadingEvent],
         pending_store_keys: set[OffloadKey] | frozenset[OffloadKey] = frozenset(),
+        is_write_pending: Callable[[OffloadKey], bool] | None = None,
     ) -> Iterable[KVCacheEvent]:
         """Translate raw OffloadingEvents into self-describing KV events.
 
@@ -275,7 +276,9 @@ class OffloadingEventsTracker:
             meta = self._pending_event_metadata.get(key)
             if meta is None or meta.active_residencies:
                 self._deferred_removals.discard(key)
-            elif key not in pending_store_keys:
+            elif key not in pending_store_keys and not (
+                is_write_pending is not None and is_write_pending(key)
+            ):
                 self._pending_event_metadata.pop(key)
                 self._deferred_removals.discard(key)
 
