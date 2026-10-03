@@ -684,6 +684,22 @@ def test_reallocated_pending_chunk_survives_older_cpu_removal(success):
     assert key not in tracker._pending_event_metadata
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_full_attention_metadata_diagnostics(monkeypatch, enabled):
+    monkeypatch.setenv("KVCR_EVENT_METADATA_DIAGNOSTICS", "1" if enabled else "0")
+    tracker = _tracker()
+    tracker._group_specs[0] = _FULL_ATTENTION_EVENT_SPEC
+    key = make_offload_key(_hash(0), 0)
+    with monkeypatch.context() as patch:
+        info = MagicMock()
+        patch.setattr(
+            "vllm.distributed.kv_transfer.kv_connector.v1.offloading.events.logger.info",
+            info,
+        )
+        list(tracker.take_events([_stored_event([key])]))
+        assert info.call_count == int(enabled)
+
+
 def test_pending_cpu_removal_consumes_hit_backfill_until_next_hit():
     tracker = _tracker()
     block_hashes = [_hash(0), _hash(1)]
