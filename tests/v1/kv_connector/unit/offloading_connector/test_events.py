@@ -642,8 +642,10 @@ def test_pending_promotion_captures_payload_before_inventory(history, success):
     assert key not in tracker._pending_event_metadata
 
 
-@pytest.mark.parametrize("success", [False, True])
-def test_reallocated_pending_chunk_survives_older_cpu_removal(success):
+@pytest.mark.parametrize(
+    "success,inventory_first", [(False, False), (True, True), (True, False)]
+)
+def test_reallocated_pending_chunk_survives_older_cpu_removal(success, inventory_first):
     tracker = _tracker()
     req = _request(block_hashes=[_hash(0), _hash(1)], token_count=3200)
     group = _group_config(block_size=1600)
@@ -665,7 +667,7 @@ def test_reallocated_pending_chunk_survives_older_cpu_removal(success):
         is None
     )
     list(OffloadingConnectorScheduler.take_events(scheduler))
-    if success:
+    if success and inventory_first:
         [inventory] = tracker.take_events(
             [_stored_event([key], ownership="kvcr", removal_expected=True)]
         )
@@ -676,6 +678,12 @@ def test_reallocated_pending_chunk_survives_older_cpu_removal(success):
     if success:
         assert event.block_size == 1600
         assert event.token_ids == req.all_token_ids[:1600]
+        if not inventory_first:
+            [inventory] = tracker.take_events(
+                [_stored_event([key], ownership="kvcr", removal_expected=True)]
+            )
+            assert inventory.block_size == 1600
+            assert inventory.token_ids == req.all_token_ids[:1600]
         primary.prepare_store([other], ctx)
         list(OffloadingConnectorScheduler.take_events(scheduler))
         list(tracker.take_events([_removed_event([key], ownership="kvcr")]))
