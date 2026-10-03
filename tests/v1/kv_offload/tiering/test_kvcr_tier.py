@@ -182,6 +182,7 @@ def _make_tier(
     g3: dict[str, object] | None = None,
     control_ports: list[int] | None = None,
     data_parallel_rank_local: int | None = None,
+    backpressure_detector: Any = None,
 ) -> KVCRSecondaryTierManager:
     def make_control(_bind_host, bind_port, advertise_host):
         return _StubControlChannel(f"tcp://{advertise_host}:{int(bind_port)}")
@@ -224,7 +225,14 @@ def _make_tier(
         g3=g3,
         local_dram_backend="UCX",
         remote_fw_dram_backend="UCX",
+        backpressure_detector=backpressure_detector,
     )
+
+
+def test_kvcr_tier_accepts_factory_backpressure_detector(monkeypatch):
+    detector = object()
+    tier = _make_tier(monkeypatch, RecordingKVCR(), backpressure_detector=detector)
+    assert tier.bp_detector is detector
 
 
 def test_kvcr_tier_configures_service_for_local_dp_rank(monkeypatch):
