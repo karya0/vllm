@@ -15,6 +15,7 @@ of the same hash. Opt-in via
 KV cache events are enabled. See the PR description for the full design.
 """
 
+import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -35,6 +36,7 @@ from vllm.v1.core.kv_cache_utils import (
 )
 from vllm.v1.kv_cache_interface import (
     KVCacheGroupSpec,
+    KVCacheSpecKind,
     get_kv_cache_spec_kind,
     get_kv_cache_spec_sliding_window,
 )
@@ -120,6 +122,29 @@ class OffloadingEventsTracker:
         # OffloadKey -> payload snapshot, kept until final removal or reset.
         self._pending_event_metadata: dict[OffloadKey, _OffloadEventMetadata] = {}
         self._deferred_removals: set[OffloadKey] = set()
+        self._diagnostics = os.getenv("KVCR_EVENT_METADATA_DIAGNOSTICS") == "1"
+
+    def _trace_metadata(self, action: str, key: OffloadKey) -> None:
+        if not self._diagnostics:
+            return
+        group = get_offload_group_idx(key)
+        spec = self._group_specs.get(group)
+        if (
+            spec is None
+            or spec.kv_cache_spec_kind != KVCacheSpecKind.FULL_ATTENTION.value
+        ):
+            return
+        meta = self._pending_event_metadata.get(key)
+        logger.info(
+            "KVCR_EVENT_METADATA action=%s key=%s group=%s present=%s residencies=%s",
+            action,
+            key.hex(),
+            group,
+            meta is not None,
+            sorted((str(m), str(o)) for m, o in meta.active_residencies)
+            if meta
+            else [],
+        )
 
     def record_store(
         self,
@@ -141,6 +166,7 @@ class OffloadingEventsTracker:
         if existing := self._pending_event_metadata.get(offload_key):
             meta.active_residencies.update(existing.active_residencies)
         self._pending_event_metadata[offload_key] = meta
+        self._trace_metadata("record_store", offload_key)
 
     def record_lookup(
         self,
@@ -158,6 +184,7 @@ class OffloadingEventsTracker:
             self._pending_event_metadata[offload_key] = self._build_event_metadata(
                 req, group_config, chunk_idx
             )
+            self._trace_metadata("record_lookup", offload_key)
         self._pending_event_metadata[offload_key].active_residencies.add(
             (Medium.CPU, None)
         )
@@ -244,6 +271,7 @@ class OffloadingEventsTracker:
         if existing := self._pending_event_metadata.get(offload_key):
             meta.active_residencies.update(existing.active_residencies)
         self._pending_event_metadata[offload_key] = meta
+        self._trace_metadata("record_partial", offload_key)
 
     def take_events(
         self,
@@ -279,6 +307,7 @@ class OffloadingEventsTracker:
             elif key not in pending_store_keys and not (
                 is_write_pending is not None and is_write_pending(key)
             ):
+                self._trace_metadata("prune", key)
                 self._pending_event_metadata.pop(key)
                 self._deferred_removals.discard(key)
 
@@ -385,6 +414,9 @@ class OffloadingEventsTracker:
         # Events are self-contained (own parent), so key order is free.
         locality = event.locality.value if event.locality is not None else None
         for key in event.keys:
+            self._trace_metadata(
+                f"store:{event.medium}:{event.ownership}:{event.removal_expected}", key
+            )
             meta = self._pending_event_metadata.get(key)
             if meta is None:
                 if self.self_describing_enabled:
@@ -439,6 +471,7 @@ class OffloadingEventsTracker:
                     maybe_convert_block_hash(h) for h in meta.block_hashes
                 )
                 meta.active_residencies.discard((event.medium, event.ownership))
+                self._trace_metadata("remove:" + str(event.medium), key)
             else:
                 if self.self_describing_enabled:
                     logger.warning_once(
