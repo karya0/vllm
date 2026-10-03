@@ -642,6 +642,48 @@ def test_pending_promotion_captures_payload_before_inventory(history, success):
     assert key not in tracker._pending_event_metadata
 
 
+@pytest.mark.parametrize("success", [False, True])
+def test_reallocated_pending_chunk_survives_older_cpu_removal(success):
+    tracker = _tracker()
+    req = _request(block_hashes=[_hash(0), _hash(1)], token_count=3200)
+    group = _group_config(block_size=1600)
+    key, other = [make_offload_key(_hash(i), 0) for i in range(2)]
+    primary = CPUOffloadingManager(num_chunks=1, enable_events=True)
+    ctx = ReqContext(req_id="promotion")
+    for idx, stored_key in enumerate([key, other]):
+        tracker.record_store(req, group, idx, stored_key)
+        primary.prepare_store([stored_key], ctx)
+        primary.complete_store([stored_key], ctx)
+        if idx == 0:
+            list(tracker.take_events(primary.take_events()))
+    primary.prepare_store([key], ctx)
+    scheduler = SimpleNamespace(manager=primary, _events_tracker=tracker, _jobs={})
+    assert (
+        OffloadingConnectorScheduler._maximal_prefix_lookup(
+            scheduler, [key], ctx, req, group, 0
+        )
+        is None
+    )
+    list(OffloadingConnectorScheduler.take_events(scheduler))
+    if success:
+        [inventory] = tracker.take_events(
+            [_stored_event([key], ownership="kvcr", removal_expected=True)]
+        )
+        assert inventory.block_size == 1600
+        assert inventory.token_ids == req.all_token_ids[:1600]
+    primary.complete_store([key], ctx, success=success)
+    [event] = OffloadingConnectorScheduler.take_events(scheduler)
+    if success:
+        assert event.block_size == 1600
+        assert event.token_ids == req.all_token_ids[:1600]
+        primary.prepare_store([other], ctx)
+        list(OffloadingConnectorScheduler.take_events(scheduler))
+        list(tracker.take_events([_removed_event([key], ownership="kvcr")]))
+    else:
+        assert isinstance(event, BlockRemoved)
+    assert key not in tracker._pending_event_metadata
+
+
 def test_pending_cpu_removal_consumes_hit_backfill_until_next_hit():
     tracker = _tracker()
     block_hashes = [_hash(0), _hash(1)]
