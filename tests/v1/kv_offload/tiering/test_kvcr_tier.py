@@ -182,6 +182,7 @@ def _make_tier(
     g3: dict[str, object] | None = None,
     control_ports: list[int] | None = None,
     data_parallel_rank_local: int | None = None,
+    g2_resize_granularity_bytes: int = 0,
 ) -> KVCRSecondaryTierManager:
     def make_control(_bind_host, bind_port, advertise_host):
         return _StubControlChannel(f"tcp://{advertise_host}:{int(bind_port)}")
@@ -218,6 +219,7 @@ def _make_tier(
         control_advertise_host="127.0.0.1",
         enable_telemetry=enable_telemetry,
         secondary_g2_slots=secondary_g2_slots,
+        g2_resize_granularity_bytes=g2_resize_granularity_bytes,
         kvcr_service_socket_path=kvcr_service_socket_path,
         compatibility_digest=compatibility_digest,
         policy=policy,
@@ -252,6 +254,23 @@ def test_kvcr_tier_configures_service_for_local_dp_rank(monkeypatch):
     assert kvcr.backend_configs.local_dram is None
 
 
+def test_kvcr_online_resize_passes_config_and_busy_result(monkeypatch):
+    kvcr = RecordingKVCR()
+    calls = []
+    kvcr.resize_g2 = lambda name, size: calls.append((name, size)) or False
+    tier = _make_tier(
+        monkeypatch,
+        kvcr,
+        kvcr_service_socket_path="/tmp/kvcr.sock",
+        compatibility_digest="resize",
+        g2_resize_granularity_bytes=1 << 30,
+    )
+    assert kvcr.config.g2_resize_granularity_bytes == 1 << 30
+    assert kvcr.constructor_bindings.resize_g2_memory is None
+    assert tier.resize_g2(30 << 30).result(timeout=2) is False
+    assert calls == [("", 30 << 30)]
+
+
 def test_kvcr_tier_converts_g3_paths(monkeypatch, tmp_path):
     """Convert user-provided G3 paths to KVCR's typed configuration."""
     kvcr = RecordingKVCR()
@@ -267,6 +286,106 @@ def test_kvcr_tier_converts_g3_paths(monkeypatch, tmp_path):
         paths=(path,),
         capacity_bytes_per_file=64,
     )
+
+
+def test_kvcr_resize_uses_engine_utility_dispatch(monkeypatch):
+    from queue import Queue
+    from threading import Event
+
+    from vllm.distributed.kv_transfer.kv_connector.v1.offloading_connector import (
+        OffloadingConnector,
+    )
+    from vllm.v1.engine import EngineCoreRequestType
+    from vllm.v1.engine.core import EngineCoreProc, EngineShutdownState
+
+    kvcr = RecordingKVCR()
+    calls = []
+    release = Event()
+
+    def resize(name, size):
+        assert release.wait(timeout=2)
+        calls.append((name, size))
+        return False
+
+    kvcr.resize_g2 = resize
+    tier = _make_tier(monkeypatch, kvcr)
+    connector = OffloadingConnector.__new__(OffloadingConnector)
+    connector.connector_scheduler = SimpleNamespace(
+        manager=SimpleNamespace(secondary_tiers=[tier])
+    )
+    core = EngineCoreProc.__new__(EngineCoreProc)
+    core.scheduler = SimpleNamespace(get_kv_connector=lambda: connector)
+    core.shutdown_state = EngineShutdownState.RUNNING
+    core.output_queue = Queue()
+    try:
+        core._handle_client_request(
+            EngineCoreRequestType.UTILITY, (0, 17, "resize_kvcr_g2", [30 << 30])
+        )
+        assert core.output_queue.empty()  # Scheduling can proceed before completion.
+    finally:
+        release.set()
+    output = core.output_queue.get(timeout=2)[1].utility_output
+    assert output.failure_message is None
+    assert calls == [("", 30 << 30)]
+    assert output.result.result is False  # Busy is not an RPC failure.
+
+
+def test_kvcr_worker_resize_rejects_subpage_chunks_before_opening_control(monkeypatch):
+    with pytest.raises(ValueError, match="page aligned"):
+        _make_tier(
+            monkeypatch,
+            RecordingKVCR(),
+            secondary_g2_slots=512,
+            g2_resize_granularity_bytes=16,
+        )
+
+
+def test_kvcr_worker_resize_preserves_head_and_releases_tail(monkeypatch):
+    import ctypes
+    import mmap
+
+    if not hasattr(mmap, "MADV_REMOVE"):
+        pytest.skip("Linux shared-mmap physical release")
+    kvcr = RecordingKVCR()
+    tier = _make_tier(
+        monkeypatch,
+        kvcr,
+        secondary_g2_slots=512,
+        g2_resize_granularity_bytes=4096,
+    )
+    region = tier._local_dram_mmap
+    try:
+        assert kvcr.constructor_bindings.resize_g2_memory is not None
+        region[:] = b"h" * 4096 + b"t" * 4096
+        address = ctypes.addressof(ctypes.c_char.from_buffer(region))
+        callback = kvcr.constructor_bindings.resize_g2_memory
+        callback("", 8192, 4096)
+        assert region[:4096] == b"h" * 4096
+        assert region[4096:] == bytes(4096)
+        callback("", 4096, 8192)
+        assert ctypes.addressof(ctypes.c_char.from_buffer(region)) == address
+        assert region[:4096] == b"h" * 4096
+    finally:
+        region.close()
+
+
+def test_kvcr_resize_recipe_uses_secondary_tier_factory(monkeypatch):
+    from vllm.v1.kv_offload.tiering.factory import SecondaryTierFactory
+
+    kvcr = RecordingKVCR()
+    tier = _make_tier(monkeypatch, kvcr)
+    configured = SecondaryTierFactory.create_secondary_tier(
+        {
+            "type": "kvcr",
+            "router_capabilities": ["router_hint"],
+            "control_ports": [7777],
+            "g2_resize_granularity_bytes": 1 << 30,
+        },
+        tier._primary_kv_view,
+        tier._offloading_spec,
+    )
+    assert isinstance(configured, KVCRSecondaryTierManager)
+    assert kvcr.config.g2_resize_granularity_bytes == 1 << 30
 
 
 def test_kvcr_tier_adapts_request_and_load(monkeypatch):

@@ -1042,6 +1042,30 @@ class EngineCore:
     def set_weight_version(self, weight_version: str) -> None:
         self._weight_version = weight_version
 
+    def resize_kvcr_g2(self, size_bytes: int) -> Future[bool]:
+        """Operator utility: resize the sole KVCR tier without blocking scheduling."""
+        from vllm.distributed.kv_transfer.kv_connector.v1.offloading_connector import (
+            OffloadingConnector,
+        )
+        from vllm.v1.kv_offload.tiering.kvcr.manager import KVCRSecondaryTierManager
+
+        connector = self.scheduler.get_kv_connector()
+        if (
+            not isinstance(connector, OffloadingConnector)
+            or connector.connector_scheduler is None
+        ):
+            raise ValueError("G2 resize requires an OffloadingConnector scheduler")
+        tiers = [
+            tier
+            for tier in getattr(
+                connector.connector_scheduler.manager, "secondary_tiers", ()
+            )
+            if isinstance(tier, KVCRSecondaryTierManager)
+        ]
+        if len(tiers) != 1:
+            raise ValueError("G2 resize requires exactly one KVCR secondary tier")
+        return tiers[0].resize_g2(size_bytes)
+
     def get_weight_version(self) -> str:
         """Return the latest committed weight version."""
         return self._weight_version

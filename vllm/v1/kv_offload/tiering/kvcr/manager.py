@@ -7,8 +7,11 @@ import mmap
 import socket
 import time
 import uuid
+from collections import deque
 from collections.abc import Collection, Iterable
+from concurrent.futures import Future
 from pathlib import Path
+from threading import Thread
 from typing import TYPE_CHECKING, Any, cast
 
 import msgspec
@@ -82,6 +85,7 @@ from vllm.v1.kv_offload.tiering.base import (
 
 if TYPE_CHECKING:
     from vllm.v1.kv_offload.base import OffloadingSpec
+    from vllm.v1.kv_offload.tiering.backpressure import BackpressureDetector
 
 
 _REQUIRED_ROUTER_CAPABILITIES = ROUTER_HINT_CAPABILITIES
@@ -295,9 +299,27 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         g3: dict[str, Any] | None = None,
         local_dram_backend: str = "UCX",
         remote_fw_dram_backend: str = "UCX",
+        g2_resize_granularity_bytes: int = 0,
+        backpressure_detector: "BackpressureDetector | None" = None,
     ) -> None:
-        super().__init__(offloading_spec, primary_kv_view, tier_type)
+        super().__init__(
+            offloading_spec, primary_kv_view, tier_type, backpressure_detector
+        )
         selected_policy = _resolve_policy(policy)
+        if (
+            g2_resize_granularity_bytes
+            and secondary_g2_slots
+            and kvcr_service_socket_path is None
+        ):
+            if g2_resize_granularity_bytes % mmap.PAGESIZE:
+                raise ValueError("G2 resize chunks must be page aligned")
+            stride = primary_kv_view.strides[0] if primary_kv_view.strides else 0
+            if (
+                not stride
+                or g2_resize_granularity_bytes % stride
+                or (secondary_g2_slots * stride) % g2_resize_granularity_bytes
+            ):
+                raise ValueError("G2 resize chunks must contain complete rows/pool")
         if (kvcr_service_socket_path is None) != (compatibility_digest is None):
             raise ValueError(
                 "kvcr_service_socket_path and compatibility_digest must be "
@@ -403,7 +425,7 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
             g3_config = G3Options(**g3_values)
         nixl_agent_name = f"KVCR-{uuid.uuid4()}"
         self._framework_pin_adapter = _FrameworkPinAdapter(self)
-        self._inventory_events: list[OffloadingEvent] = []
+        self._inventory_events: deque[OffloadingEvent] = deque()
 
         try:
             self._kvcr = KVCR(
@@ -414,6 +436,7 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
                     abandon_timeout_ms=abandon_timeout_ms,
                     nixl_agent_name=nixl_agent_name,
                     nixl_listen_port=_nixl_listen_port,
+                    g2_resize_granularity_bytes=g2_resize_granularity_bytes,
                 ),
                 KVCRBindings(
                     request_pin=self._framework_pin_adapter.request_pin,
@@ -427,6 +450,11 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
                         OffloadingConnectorStats if enable_telemetry else None
                     ),
                     policy=selected_policy,
+                    resize_g2_memory=(
+                        self._resize_g2_memory
+                        if local_mapping is not None and g2_resize_granularity_bytes
+                        else None
+                    ),
                 ),
                 KVCRBackendConfigs(
                     framework_dram=FrameworkDramInput(
@@ -451,6 +479,29 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         self._local_dram_mmap = local_mapping
         self._finished_jobs: list[JobResult] = []
         self._jobs_by_op: dict[OpHandle, _JobState] = {}
+
+    def resize_g2(self, size_bytes: int) -> Future[bool]:
+        """Resize without blocking scheduling; False means a busy tail."""
+        future: Future[bool] = Future()
+
+        def resize():
+            try:
+                future.set_result(self._kvcr.resize_g2("", size_bytes))
+            except Exception as error:
+                future.set_exception(error)
+
+        Thread(target=resize, name="kvcr-g2-resize", daemon=True).start()
+        return future
+
+    def _resize_g2_memory(self, _pool: str, old_size: int, size: int) -> None:
+        region = self._local_dram_mmap
+        assert region is not None
+        if size < old_size:
+            # KVCR deregisters the retiring tail before calling this binding.
+            region.madvise(mmap.MADV_REMOVE, size, old_size - size)
+        elif size > old_size:
+            address = ctypes.addressof(ctypes.c_char.from_buffer(region))
+            ctypes.memset(address + old_size, 0, size - old_size)
 
     @override
     def lookup(self, key: OffloadKey, req_context: ReqContext) -> LookupResult:
@@ -569,9 +620,10 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
 
     @override
     def take_events(self) -> Iterable[OffloadingEvent]:
-        events = self._inventory_events
-        self._inventory_events = []
-        return events
+        # One scheduler consumer; progress-thread appends remain for next poll.
+        return [
+            self._inventory_events.popleft() for _ in range(len(self._inventory_events))
+        ]
 
     @override
     def on_new_request(self, req_context: ReqContext) -> RequestOffloadingContext:
