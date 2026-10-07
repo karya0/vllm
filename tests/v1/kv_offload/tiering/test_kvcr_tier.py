@@ -519,12 +519,18 @@ def test_kvcr_tier_serves_primary_pin_request(monkeypatch, caplog):
     assert bindings is not None
     request = bindings.request_pin(keys)
     caplog.set_level(logging.DEBUG, logger="vllm.v1.kv_offload.tiering.kvcr.manager")
+    monkeypatch.setattr(
+        logging.getLogger("vllm.v1.kv_offload.tiering.kvcr.manager"),
+        "handlers",
+        [caplog.handler],
+    )
 
     tier.serve_external_requests(Parent())
 
     [(queued_request, result)] = bindings.poll_pin_results()
     assert queued_request == request
     assert "hit=2 miss=1 pending=0 reason=success" in caplog.text
+    assert "KVCR_FRAMEWORK_PIN pid=" in caplog.text
     assert result is not None
     pin_handle, descriptors = result
     assert descriptors[keys[1]] is None
@@ -556,6 +562,11 @@ def test_framework_pin_diagnostics_no_ready_hit(monkeypatch, caplog, status):
     parent = Mock()
     parent.lookup.return_value = status
     caplog.set_level(logging.DEBUG, logger="vllm.v1.kv_offload.tiering.kvcr.manager")
+    monkeypatch.setattr(
+        logging.getLogger("vllm.v1.kv_offload.tiering.kvcr.manager"),
+        "handlers",
+        [caplog.handler],
+    )
     request = kvcr.constructor_bindings.request_pin((BlockKey(b"k"),))
     tier.serve_external_requests(parent)
     assert kvcr.constructor_bindings.poll_pin_results() == [(request, None)]

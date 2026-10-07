@@ -6,6 +6,7 @@ import ctypes
 import hashlib
 import logging
 import mmap
+import os
 import socket
 import time
 import uuid
@@ -241,9 +242,10 @@ class _FrameworkPinAdapter:
         finally:
             if diagnostic:
                 logger.debug(
-                    "KVCR_FRAMEWORK_PIN pin_request=%d request_id=%s keys=%d "
+                    "KVCR_FRAMEWORK_PIN pid=%d pin_request=%d request_id=%s keys=%d "
                     "hit=%d miss=%d pending=%d reason=%s elapsed_ms=%.3f "
                     "key_hash_sample=%s key_sample_cap=8",
+                    os.getpid(),
                     request,
                     request_id,
                     len(offload_keys),
