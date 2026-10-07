@@ -3,6 +3,7 @@
 """vLLM secondary-tier adapter for KVCR."""
 
 import ctypes
+import hashlib
 import logging
 import mmap
 import socket
@@ -167,7 +168,7 @@ class _FrameworkPinAdapter:
         pending = self._pending_pins
         self._pending_pins = {}
         self._completed_pins.extend(
-            (request, self._resolve_pin(parent, keys))
+            (request, self._resolve_pin(parent, keys, request))
             for request, keys in pending.items()
         )
 
@@ -180,7 +181,7 @@ class _FrameworkPinAdapter:
         self._pending_pins.pop(request, None)
 
     def _resolve_pin(
-        self, parent: ParentManager, keys: Collection[BlockKey]
+        self, parent: ParentManager, keys: Collection[BlockKey], request: PinRequestId
     ) -> tuple[str, dict[BlockKey, list[MemoryRef] | None]] | None:
         offload_keys = tuple(OffloadKey(bytes(key)) for key in keys)
         request_id = f"kvcr-source:{self._next_request_id}"
@@ -189,21 +190,35 @@ class _FrameworkPinAdapter:
         started = False
         job: TransferJob | None = None
         pin_handle: str | None = None
+        diagnostic = logger.isEnabledFor(logging.DEBUG)
+        start = time.monotonic() if diagnostic else 0
+        statuses: list[LookupResult] = []
+        reason = "exception"
         try:
             parent.on_new_request(req_context)
             started = True
-            hit_keys = tuple(
-                key
-                for key in offload_keys
-                if parent.lookup(key, req_context) is LookupResult.HIT
-            )
+            if diagnostic:
+                statuses = [parent.lookup(key, req_context) for key in offload_keys]
+                hit_keys = tuple(
+                    key
+                    for key, status in zip(offload_keys, statuses)
+                    if status is LookupResult.HIT
+                )
+            else:
+                hit_keys = tuple(
+                    key
+                    for key in offload_keys
+                    if parent.lookup(key, req_context) is LookupResult.HIT
+                )
             if not hit_keys:
+                reason = "no_ready_hit"
                 return None
 
             job = parent.create_store_job(hit_keys, req_context)
             job_keys = tuple(job.keys)
             chunk_ids = tuple(int(chunk_id) for chunk_id in job.chunk_ids)
             if len(job_keys) != len(chunk_ids) or set(job_keys) != set(hit_keys):
+                reason = "job_key_chunk_mismatch"
                 return None
 
             descriptors: dict[BlockKey, list[MemoryRef] | None] = {
@@ -218,11 +233,30 @@ class _FrameworkPinAdapter:
             )
             pin_handle = f"kvcr-job-{job.job_id}"
             self._pin_jobs[pin_handle] = job.job_id
+            reason = "success"
             return pin_handle, descriptors
         except Exception:
             logger.warning("KVCR source acquisition failed", exc_info=True)
             return None
         finally:
+            if diagnostic:
+                logger.debug(
+                    "KVCR_FRAMEWORK_PIN pin_request=%d request_id=%s keys=%d "
+                    "hit=%d miss=%d pending=%d reason=%s elapsed_ms=%.3f "
+                    "key_hash_sample=%s key_sample_cap=8",
+                    request,
+                    request_id,
+                    len(offload_keys),
+                    statuses.count(LookupResult.HIT),
+                    statuses.count(LookupResult.MISS),
+                    statuses.count(LookupResult.HIT_PENDING),
+                    reason,
+                    (time.monotonic() - start) * 1000,
+                    ",".join(
+                        hashlib.sha256(bytes(k)).hexdigest()[:16]
+                        for k in offload_keys[:8]
+                    ),
+                )
             if started:
                 try:
                     parent.on_request_finished(req_context)

@@ -486,7 +486,7 @@ def test_kvcr_tier_maps_query_status(monkeypatch, status, expected):
     assert tier.lookup(OffloadKey(b"k0"), ReqContext(req_id="req")) is expected
 
 
-def test_kvcr_tier_serves_primary_pin_request(monkeypatch):
+def test_kvcr_tier_serves_primary_pin_request(monkeypatch, caplog):
     """Hold primary-tier hits until KVCR releases the corresponding pin."""
     kvcr = RecordingKVCR()
     tier = _make_tier(monkeypatch, kvcr)
@@ -518,11 +518,13 @@ def test_kvcr_tier_serves_primary_pin_request(monkeypatch):
     bindings = kvcr.constructor_bindings
     assert bindings is not None
     request = bindings.request_pin(keys)
+    caplog.set_level(logging.DEBUG, logger="vllm.v1.kv_offload.tiering.kvcr.manager")
 
     tier.serve_external_requests(Parent())
 
     [(queued_request, result)] = bindings.poll_pin_results()
     assert queued_request == request
+    assert "hit=2 miss=1 pending=0 reason=success" in caplog.text
     assert result is not None
     pin_handle, descriptors = result
     assert descriptors[keys[1]] is None
@@ -545,6 +547,22 @@ def test_kvcr_tier_serves_primary_pin_request(monkeypatch):
 
     assert polls == 1
     assert list(tier.get_finished_jobs()) == [JobResult(11, True)]
+
+
+@pytest.mark.parametrize("status", [LookupResult.MISS, LookupResult.HIT_PENDING])
+def test_framework_pin_diagnostics_no_ready_hit(monkeypatch, caplog, status):
+    kvcr = RecordingKVCR()
+    tier = _make_tier(monkeypatch, kvcr)
+    parent = Mock()
+    parent.lookup.return_value = status
+    caplog.set_level(logging.DEBUG, logger="vllm.v1.kv_offload.tiering.kvcr.manager")
+    request = kvcr.constructor_bindings.request_pin((BlockKey(b"k"),))
+    tier.serve_external_requests(parent)
+    assert kvcr.constructor_bindings.poll_pin_results() == [(request, None)]
+    parent.create_store_job.assert_not_called()
+    expected = "miss=1 pending=0" if status is LookupResult.MISS else "miss=0 pending=1"
+    assert f"pin_request={request}" in caplog.text
+    assert f"hit=0 {expected} reason=no_ready_hit" in caplog.text
 
 
 def test_kvcr_telemetry_is_opt_in_and_namespaced_at_vllm_boundary(monkeypatch):
