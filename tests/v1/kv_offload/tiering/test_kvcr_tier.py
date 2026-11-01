@@ -4,15 +4,17 @@
 from collections.abc import Collection, Iterable, Mapping
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
-import msgspec
 import numpy as np
 import pytest
 
 pytest.importorskip("kvcr")
 
 from kvcr import KVCRBindings
+from kvcr import api as kvcr_api
 from kvcr.config import G3Options, KVCRBackendConfigs, KVCRConfig, KVCRGuardConfig
+from kvcr.hints.parser import parse_hints
 from kvcr.policy import FIFOPolicy, G3FIFOPolicy, G3LRUPolicy, LRUPolicy
 from kvcr.types import (
     BlockKey,
@@ -87,6 +89,7 @@ class RecordingKVCR:
         self._next_op_handle = 1
 
     def submit_hint(self, *args: Any, **kwargs: Any) -> None:
+        assert parse_hints(kwargs["hints"], {}) == ([], [])
         self.submit_hint_calls.append((args, kwargs))
 
     def discard_hint(self, request_id: str) -> None:
@@ -264,6 +267,43 @@ def test_kvcr_tier_configures_service_for_local_dp_rank(monkeypatch):
     assert kvcr.backend_configs.local_dram is None
 
 
+def test_kvcr_tier_configuration_matches_guarded_public_constructor(monkeypatch):
+    """Exercise public construction and handback with native recovery mocked."""
+    recording = RecordingKVCR()
+    _make_tier(
+        monkeypatch,
+        recording,
+        kvcr_service_socket_path="/tmp/kvcr.sock",
+        compatibility_digest="Opaque-Digest",
+    )
+    core = Mock(config=recording.config)
+    claimed = SimpleNamespace(hold=Mock())
+    recovery = kvcr_api._recovery
+    claim = Mock(return_value=claimed)
+    monkeypatch.setattr(recovery, "claim_guarded_pool", claim)
+    monkeypatch.setattr(recovery, "claimed_core", Mock(return_value=core))
+    monkeypatch.setattr(recovery, "adopt_claimed_pool", Mock())
+    monkeypatch.setattr(recovery, "commit_claimed_pool", Mock())
+    for _ in range(2):
+        runner = kvcr_api.KVCR(
+            recording.config,
+            recording.constructor_bindings,
+            recording.backend_configs,
+            recording.guard_config,
+        )
+        assert runner.config is recording.config
+        runner.close()
+    assert claim.call_count == 2
+    claim.assert_called_with(
+        recording.config,
+        recording.guard_config,
+        recording.constructor_bindings,
+        recording.backend_configs,
+    )
+    assert core.start.call_count == core.close.call_count == 2
+    assert claimed.hold.release.call_count == 2
+
+
 def test_kvcr_tier_converts_g3_paths(monkeypatch, tmp_path):
     """Convert user-provided G3 paths to KVCR's typed configuration."""
     kvcr = RecordingKVCR()
@@ -305,9 +345,8 @@ def test_kvcr_tier_adapts_request_and_load(monkeypatch, backpressure):
 
     tier.on_new_request(ctx)
 
-    assert kvcr.submit_hint_calls == [
-        ((), {"request_id": "req", "hints": msgspec.to_builtins(kv_hint)})
-    ]
+    assert kvcr.submit_hint_calls == [((), {"request_id": "req", "hints": kv_hint})]
+    assert kvcr.submit_hint_calls[0][1]["hints"] is kv_hint
 
     bindings = kvcr.constructor_bindings
     assert bindings is not None
