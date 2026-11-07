@@ -314,7 +314,7 @@ def test_kvcr_tier_passes_nested_gaas_settings_to_the_guard_config(monkeypatch):
     assert plain.guard_config.gaas is None
 
 
-def test_kvcr_tier_guard_index_base_offsets_the_guard_slot(monkeypatch):
+def test_kvcr_tier_guard_index_base_offsets_the_guard_slot(monkeypatch, caplog):
     kvcr = RecordingKVCR()
     _make_tier(
         monkeypatch,
@@ -324,6 +324,7 @@ def test_kvcr_tier_guard_index_base_offsets_the_guard_slot(monkeypatch):
         guard_index_base=1,
     )
     assert kvcr.guard_config.guard_index == 1
+    assert "guard_index=1 guard_index_base=1" in caplog.text
     default = RecordingKVCR()
     _make_tier(
         monkeypatch,

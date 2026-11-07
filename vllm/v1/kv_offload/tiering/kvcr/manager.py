@@ -399,6 +399,19 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
             if kvcr_service_socket_path is not None and compatibility_digest is not None
             else None
         )
+        logger.info(
+            "KVCR Guard slot: guard_index=%s guard_index_base=%s "
+            "dp_local_rank=%s control_port=%s gaas=%s",
+            guard_config.guard_index if guard_config is not None else None,
+            guard_index_base,
+            dp_local_rank,
+            control_ports[dp_local_rank],
+            (
+                f"tenant={guard_config.gaas.tenant} lineage={guard_config.gaas.lineage}"
+                if guard_config is not None and guard_config.gaas is not None
+                else "absent"
+            ),
+        )
         g3_config = None
         if g3 is not None:
             g3_values = dict(g3)
