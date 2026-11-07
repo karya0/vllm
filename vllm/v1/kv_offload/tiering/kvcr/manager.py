@@ -3,7 +3,9 @@
 """vLLM secondary-tier adapter for KVCR."""
 
 import ctypes
+import logging
 import mmap
+import os
 import socket
 import time
 import uuid
@@ -139,6 +141,18 @@ def _kvcr_metric_definitions() -> dict[str, OffloadingMetricMetadata]:
             labelnames=("resource",),
         ),
     }
+
+
+def _apply_kvcr_log_level() -> None:
+    """Apply KVCR_LOG_LEVEL (e.g. DEBUG, INFO) to the "kvcr" logger."""
+    value = os.environ.get("KVCR_LOG_LEVEL")
+    if not value:
+        return
+    level = logging.getLevelName(value.strip().upper())
+    if not isinstance(level, int):
+        logger.warning("Ignoring invalid KVCR_LOG_LEVEL=%r", value)
+        return
+    logging.getLogger("kvcr").setLevel(level)
 
 
 class _FrameworkPinAdapter:
@@ -303,6 +317,7 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         super().__init__(
             offloading_spec, primary_kv_view, tier_type, backpressure_detector
         )
+        _apply_kvcr_log_level()
         if guard_index_base < 0:
             raise ValueError("guard_index_base must be non-negative")
         selected_policy = _resolve_policy(policy)
