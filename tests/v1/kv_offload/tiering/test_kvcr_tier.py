@@ -312,7 +312,7 @@ def test_kvcr_tier_passes_nested_gaas_settings_to_the_guard_config(monkeypatch):
 
 
 def test_kvcr_tier_rejects_unknown_gaas_keys(monkeypatch):
-    with pytest.raises(TypeError, match="unexpected keyword argument 'tenant_id'"):
+    with pytest.raises(TypeError, match="(?i)unexpected keyword argument 'tenant_id'"):
         _make_tier(
             monkeypatch,
             RecordingKVCR(),
