@@ -185,6 +185,7 @@ def _make_tier(
     secondary_g2_slots: int = 0,
     kvcr_service_socket_path: str | None = None,
     gaas: dict | None = None,
+    guard_index_base: int | None = None,
     compatibility_digest: str | None = None,
     enable_kv_cache_events: bool = False,
     self_describing_kv_events: bool = False,
@@ -226,6 +227,8 @@ def _make_tier(
     }
     if gaas is not None:
         tier_config["gaas"] = gaas
+    if guard_index_base is not None:
+        tier_config["guard_index_base"] = guard_index_base
     if backpressure is not None:
         tier_config["backpressure"] = backpressure
     tier = SecondaryTierFactory.create_secondary_tier(
@@ -309,6 +312,26 @@ def test_kvcr_tier_passes_nested_gaas_settings_to_the_guard_config(monkeypatch):
         compatibility_digest="Opaque-Digest",
     )
     assert plain.guard_config.gaas is None
+
+
+def test_kvcr_tier_guard_index_base_offsets_the_guard_slot(monkeypatch):
+    kvcr = RecordingKVCR()
+    _make_tier(
+        monkeypatch,
+        kvcr,
+        kvcr_service_socket_path="/tmp/kvcr.sock",
+        compatibility_digest="Opaque-Digest",
+        guard_index_base=1,
+    )
+    assert kvcr.guard_config.guard_index == 1
+    default = RecordingKVCR()
+    _make_tier(
+        monkeypatch,
+        default,
+        kvcr_service_socket_path="/tmp/kvcr.sock",
+        compatibility_digest="Opaque-Digest",
+    )
+    assert default.guard_config.guard_index == 0
 
 
 def test_kvcr_tier_rejects_unknown_gaas_keys(monkeypatch):

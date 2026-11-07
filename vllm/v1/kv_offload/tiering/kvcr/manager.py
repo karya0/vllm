@@ -297,11 +297,14 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         local_dram_backend: str = "UCX",
         remote_fw_dram_backend: str = "UCX",
         backpressure_detector: "BackpressureDetector | None" = None,
+        guard_index_base: int = 0,
         gaas: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(
             offloading_spec, primary_kv_view, tier_type, backpressure_detector
         )
+        if guard_index_base < 0:
+            raise ValueError("guard_index_base must be non-negative")
         selected_policy = _resolve_policy(policy)
         if (kvcr_service_socket_path is None) != (compatibility_digest is None):
             raise ValueError(
@@ -389,7 +392,7 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         guard_config = (
             KVCRGuardConfig(
                 kvcr_service_socket_path=kvcr_service_socket_path,
-                guard_index=dp_local_rank,
+                guard_index=guard_index_base + dp_local_rank,
                 compatibility_digest=compatibility_digest,
                 gaas=GaaSSettings(**gaas) if gaas else None,
             )
