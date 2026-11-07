@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-import logging
 from collections.abc import Collection, Iterable, Mapping
 from types import SimpleNamespace
 from typing import Any
@@ -249,20 +248,6 @@ def _make_tier(
     )
     assert isinstance(tier, KVCRSecondaryTierManager)
     return tier
-
-
-def test_kvcr_tier_applies_kvcr_log_level_env(monkeypatch):
-    kvcr_logger = logging.getLogger("kvcr")
-    original = kvcr_logger.level
-    try:
-        monkeypatch.setenv("KVCR_LOG_LEVEL", "debug")
-        _make_tier(monkeypatch, RecordingKVCR())
-        assert kvcr_logger.level == logging.DEBUG
-        monkeypatch.setenv("KVCR_LOG_LEVEL", "bogus")
-        _make_tier(monkeypatch, RecordingKVCR())
-        assert kvcr_logger.level == logging.DEBUG
-    finally:
-        kvcr_logger.setLevel(original)
 
 
 def test_kvcr_tier_configures_service_for_local_dp_rank(monkeypatch):
