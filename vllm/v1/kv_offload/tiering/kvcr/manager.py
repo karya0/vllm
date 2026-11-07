@@ -23,6 +23,7 @@ from kvcr import (
 )
 from kvcr.config import (
     G3Options,
+    GaaSSettings,
     KeyAdapter,
     KVCRBackendConfigs,
     KVCRConfig,
@@ -291,6 +292,7 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         secondary_g2_slots: int = 0,
         kvcr_service_socket_path: str | None = None,
         compatibility_digest: str | None = None,
+        gaas: dict[str, Any] | None = None,
         policy: str | None = None,
         g3: dict[str, Any] | None = None,
         local_dram_backend: str = "UCX",
@@ -389,6 +391,7 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
                 kvcr_service_socket_path=kvcr_service_socket_path,
                 guard_index=dp_local_rank,
                 compatibility_digest=compatibility_digest,
+                gaas=GaaSSettings(**gaas) if gaas else None,
             )
             if kvcr_service_socket_path is not None and compatibility_digest is not None
             else None

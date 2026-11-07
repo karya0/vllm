@@ -13,7 +13,13 @@ pytest.importorskip("kvcr")
 
 from kvcr import KVCRBindings
 from kvcr import api as kvcr_api
-from kvcr.config import G3Options, KVCRBackendConfigs, KVCRConfig, KVCRGuardConfig
+from kvcr.config import (
+    G3Options,
+    GaaSSettings,
+    KVCRBackendConfigs,
+    KVCRConfig,
+    KVCRGuardConfig,
+)
 from kvcr.hints.parser import parse_hints
 from kvcr.policy import FIFOPolicy, G3FIFOPolicy, G3LRUPolicy, LRUPolicy
 from kvcr.types import (
@@ -178,6 +184,7 @@ def _make_tier(
     enable_telemetry: bool = False,
     secondary_g2_slots: int = 0,
     kvcr_service_socket_path: str | None = None,
+    gaas: dict | None = None,
     compatibility_digest: str | None = None,
     enable_kv_cache_events: bool = False,
     self_describing_kv_events: bool = False,
@@ -217,6 +224,8 @@ def _make_tier(
         "local_dram_backend": "UCX",
         "remote_fw_dram_backend": "UCX",
     }
+    if gaas is not None:
+        tier_config["gaas"] = gaas
     if backpressure is not None:
         tier_config["backpressure"] = backpressure
     tier = SecondaryTierFactory.create_secondary_tier(
@@ -265,6 +274,41 @@ def test_kvcr_tier_configures_service_for_local_dp_rank(monkeypatch):
     assert (region.size, region.stride or region.size, region.count) == (16, 16, 4)
     assert (region.label, region.mem_type, region.device_Id) == ("", "DRAM", 0)
     assert kvcr.backend_configs.local_dram is None
+
+
+def test_kvcr_tier_passes_nested_gaas_settings_to_the_guard_config(monkeypatch):
+    """A nested gaas mapping reaches KVCRGuardConfig; without it nothing changes."""
+    gaas = {
+        "tenant": "t",
+        "lineage": "l",
+        "total_bytes": 8,
+        "minimum_bytes": 4,
+        "maximum_bytes": 16,
+        "state_agent": {"namespace": "ns"},
+    }
+    kvcr = RecordingKVCR()
+    _make_tier(
+        monkeypatch,
+        kvcr,
+        kvcr_service_socket_path="/tmp/kvcr.sock",
+        compatibility_digest="Opaque-Digest",
+        gaas=gaas,
+    )
+    assert kvcr.guard_config == KVCRGuardConfig(
+        kvcr_service_socket_path="/tmp/kvcr.sock",
+        guard_index=0,
+        compatibility_digest="Opaque-Digest",
+        gaas=GaaSSettings(**gaas),
+    )
+    assert kvcr.guard_config.gaas.is_v2
+    plain = RecordingKVCR()
+    _make_tier(
+        monkeypatch,
+        plain,
+        kvcr_service_socket_path="/tmp/kvcr.sock",
+        compatibility_digest="Opaque-Digest",
+    )
+    assert plain.guard_config.gaas is None
 
 
 def test_kvcr_tier_configuration_matches_guarded_public_constructor(monkeypatch):
