@@ -311,6 +311,17 @@ def test_kvcr_tier_passes_nested_gaas_settings_to_the_guard_config(monkeypatch):
     assert plain.guard_config.gaas is None
 
 
+def test_kvcr_tier_rejects_unknown_gaas_keys(monkeypatch):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'tenant_id'"):
+        _make_tier(
+            monkeypatch,
+            RecordingKVCR(),
+            kvcr_service_socket_path="/tmp/kvcr.sock",
+            compatibility_digest="Opaque-Digest",
+            gaas={"tenant": "t", "lineage": "l", "tenant_id": "x"},
+        )
+
+
 def test_kvcr_tier_configuration_matches_guarded_public_constructor(monkeypatch):
     """Exercise public construction and handback with native recovery mocked."""
     recording = RecordingKVCR()

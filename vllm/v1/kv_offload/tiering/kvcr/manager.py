@@ -292,12 +292,12 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
         secondary_g2_slots: int = 0,
         kvcr_service_socket_path: str | None = None,
         compatibility_digest: str | None = None,
-        gaas: dict[str, Any] | None = None,
         policy: str | None = None,
         g3: dict[str, Any] | None = None,
         local_dram_backend: str = "UCX",
         remote_fw_dram_backend: str = "UCX",
         backpressure_detector: "BackpressureDetector | None" = None,
+        gaas: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(
             offloading_spec, primary_kv_view, tier_type, backpressure_detector
