@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import logging
 from collections.abc import Collection, Iterable, Mapping
 from types import SimpleNamespace
 from typing import Any
@@ -315,6 +316,7 @@ def test_kvcr_tier_passes_nested_gaas_settings_to_the_guard_config(monkeypatch):
 
 
 def test_kvcr_tier_guard_index_base_offsets_the_guard_slot(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=kvcr_manager.logger.name)
     kvcr = RecordingKVCR()
     _make_tier(
         monkeypatch,
