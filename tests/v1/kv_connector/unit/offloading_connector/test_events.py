@@ -483,14 +483,23 @@ def test_take_events_opt_out_keeps_placeholders():
 
 
 @pytest.mark.parametrize(
-    "sliding_window_size_in_chunks",
-    [1, 2],
+    "sliding_window_size_in_chunks,event_spec",
+    [
+        (1, OffloadingEventGroupSpec(KVCacheSpecKind.MAMBA.value, None)),
+        (2, OffloadingEventGroupSpec(KVCacheSpecKind.SLIDING_WINDOW.value, 8)),
+    ],
     ids=["ssm", "sliding-window"],
 )
 def test_event_metadata_skips_non_full_attention_group(
     sliding_window_size_in_chunks: int,
+    event_spec: OffloadingEventGroupSpec,
 ):
-    tracker = _tracker()
+    tracker = OffloadingEventsTracker(
+        OffloadingKVEventsConfig(
+            enable_kv_cache_events=True, self_describing_kv_events=True
+        ),
+        group_specs={0: event_spec},
+    )
     group_config = _group_config(
         sliding_window_size_in_chunks=sliding_window_size_in_chunks
     )
@@ -504,6 +513,12 @@ def test_event_metadata_skips_non_full_attention_group(
     assert len(events) == 1
     assert isinstance(events[0], BlockStored)
     assert events[0].block_size == 0
+    # Consumers filter placeholders by kind before checking block geometry.
+    assert events[0].kv_cache_spec_kind == event_spec.kv_cache_spec_kind
+    assert (
+        events[0].kv_cache_spec_sliding_window
+        == event_spec.kv_cache_spec_sliding_window
+    )
 
 
 @pytest.mark.parametrize("secondary_removal_in_same_batch", [False, True])

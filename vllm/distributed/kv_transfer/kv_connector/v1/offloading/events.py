@@ -106,8 +106,14 @@ class OffloadingEventsTracker:
     observed residency removal or :meth:`reset`.
     """
 
-    def __init__(self, config: OffloadingKVEventsConfig):
+    def __init__(
+        self,
+        config: OffloadingKVEventsConfig,
+        group_specs: dict[int, OffloadingEventGroupSpec] | None = None,
+    ):
         self.config = config
+        # group_idx -> spec, so placeholder payloads still carry their kind.
+        self._group_specs = group_specs or {}
         self.self_describing_enabled = (
             config.enable_kv_cache_events and config.self_describing_kv_events
         )
@@ -341,6 +347,8 @@ class OffloadingEventsTracker:
         locality: str | None,
         ownership: str | None,
     ) -> BlockStored:
+        group_idx = get_offload_group_idx(key)
+        spec = self._group_specs.get(group_idx)
         return BlockStored(
             block_hashes=[
                 maybe_convert_block_hash(BlockHash(get_offload_block_hash(key)))
@@ -351,7 +359,11 @@ class OffloadingEventsTracker:
             block_size=0,
             medium=_MEDIUM_TO_EVENT_STR[medium],
             lora_name=None,
-            group_idx=get_offload_group_idx(key),
+            group_idx=group_idx,
+            kv_cache_spec_kind=spec.kv_cache_spec_kind if spec else None,
+            kv_cache_spec_sliding_window=(
+                spec.kv_cache_spec_sliding_window if spec else None
+            ),
             locality=locality,
             ownership=ownership,
         )

@@ -634,7 +634,13 @@ class OffloadingConnectorScheduler:
         # be freed before a request finishes).
         self._block_id_to_pending_jobs: dict[int, set[int]] = {}
 
-        self._events_tracker = OffloadingEventsTracker(spec.kv_events_config)
+        self._events_tracker = OffloadingEventsTracker(
+            spec.kv_events_config,
+            group_specs={
+                config.group_idx: config.kv_event_group_spec
+                for config in self.config.kv_group_configs
+            },
+        )
 
     def _maybe_observe_lookup_async_delay(
         self, req_status: RequestOffloadState
