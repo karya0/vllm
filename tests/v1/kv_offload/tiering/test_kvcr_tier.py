@@ -302,9 +302,18 @@ def test_kvcr_tier_passes_nested_gaas_settings_to_the_guard_config(monkeypatch):
         kvcr_service_socket_path="/tmp/kvcr.sock",
         guard_index=0,
         compatibility_digest="Opaque-Digest",
-        gaas=GaaSSettings(**gaas),
+        gaas=GaaSSettings(**gaas, key_size_bytes=36),
     )
     assert kvcr.guard_config.gaas.is_v2
+    explicit = RecordingKVCR()
+    _make_tier(
+        monkeypatch,
+        explicit,
+        kvcr_service_socket_path="/tmp/kvcr.sock",
+        compatibility_digest="Opaque-Digest",
+        gaas={**gaas, "key_size_bytes": 20},
+    )
+    assert explicit.guard_config.gaas.key_size_bytes == 20
     plain = RecordingKVCR()
     _make_tier(
         monkeypatch,

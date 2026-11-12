@@ -86,6 +86,7 @@ if TYPE_CHECKING:
 
 
 _REQUIRED_ROUTER_CAPABILITIES = ROUTER_HINT_CAPABILITIES
+_OFFLOAD_KEY_BYTES = 32 + 4  # sha256 block hash + group index, see make_offload_key
 
 logger = init_logger(__name__)
 
@@ -389,6 +390,8 @@ class KVCRSecondaryTierManager(SecondaryTierManager):
                     ],
                     backend=local_dram_backend,
                 )
+        if gaas and gaas.get("tenant") is not None:  # a v2 claim indexes its G2
+            gaas = {"key_size_bytes": _OFFLOAD_KEY_BYTES, **gaas}
         guard_config = (
             KVCRGuardConfig(
                 kvcr_service_socket_path=kvcr_service_socket_path,
